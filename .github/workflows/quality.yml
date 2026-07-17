@@ -1,0 +1,90 @@
+name: CI Quality
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  build_analyze_deploy_audit:
+    runs-on: ubuntu-latest
+
+    env:
+      SURGE_DOMAIN: katell-lours.surge.sh
+      SURGE_PATH: dist
+      SONAR_ORG: katellg
+      SONAR_PROJECT_KEY: katellg_agence-lours
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build site
+        run: npm run build
+
+      - name: SonarCloud scan
+        uses: SonarSource/sonarqube-scan-action@v8
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        with:
+          args: >
+            -Dsonar.organization=${{ env.SONAR_ORG }}
+            -Dsonar.projectKey=${{ env.SONAR_PROJECT_KEY }}
+            -Dsonar.sources=.
+            -Dsonar.exclusions=node_modules/**,dist/**
+
+      - name: Count Sonar issues
+        id: sonar_issues
+        run: |
+          python3 - <<'PY'
+          import os, requests, json
+          token = os.environ["SONAR_TOKEN"]
+          org = os.environ["SONAR_ORG"]
+          project = os.environ["SONAR_PROJECT_KEY"]
+          url = "https://sonarcloud.io/api/issues/search"
+          params = {"componentKeys": project, "ps": 1}
+          r = requests.get(url, params=params, auth=(token, ""), timeout=60)
+          r.raise_for_status()
+          data = r.json()
+          print(f"TOTAL_ISSUES={data['total']}")
+          counts = {"BUG":0, "VULNERABILITY":0, "CODE_SMELL":0, "SECURITY_HOTSPOT":0}
+          for t in counts:
+            rr = requests.get(url, params={**params, "types": t}, auth=(token, ""), timeout=60)
+            rr.raise_for_status()
+            counts[t] = rr.json().get("total", 0)
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+            f.write(f"total_issues={data['total']}\n")
+            for k,v in counts.items():
+              f.write(f"{k.lower()}={v}\n")
+          print(json.dumps({"total": data["total"], **counts}, indent=2))
+          PY
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+
+      - name: Deploy to Surge
+        run: npx surge ./dist $SURGE_DOMAIN
+        env:
+          SURGE_TOKEN: ${{ secrets.SURGE_TOKEN }}
+
+      - name: Install GreenIT CLI deps
+        run: npm i -g cnumr/GreenIT-Analysis-cli
+
+      - name: Run EcoIndex audit
+        run: |
+          mkdir -p output
+          cat > output/url.yaml <<EOF
+          - url: https://$SURGE_DOMAIN
+          EOF
+          greenit analyse output/url.yaml output/greenit-results.xlsx
