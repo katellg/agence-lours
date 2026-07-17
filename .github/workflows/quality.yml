@@ -52,7 +52,7 @@ jobs:
           r.raise_for_status()
           data = r.json()
           print(f"TOTAL_ISSUES={data['total']}")
-          counts = {"BUG":0, "VULNERABILITY":0, "CODE_SMELL":0, "SECURITY_HOTSPOT":0}
+          counts = {"BUG":0, "VULNERABILITY":0, "CODE_SMELL":0}
           for t in counts:
             rr = requests.get(url, params={**params, "types": t}, auth=(token, ""), timeout=60)
             rr.raise_for_status()
